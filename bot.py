@@ -2,14 +2,22 @@
 """
 Bot runner that reads configuration from config.py (no .env), performs a single CDP token injection attempt
 and proceeds even if verification fails. Intervals support range strings (e.g. "3-5" or "3.5-5.5").
+
+Changes made for repo-wide update:
+- Send only "owo hunt"
+- Do NOT require a channel id in tokens file (token only is supported)
+- Run accounts sequentially (one-by-one)
+- After sending "owo hunt", wait for the OwO rules button and click it
+- Robust CDP/localStorage injection with fallback
 """
+
 import os
 import time
 import logging
 import hashlib
 import random
+import json
 from itertools import cycle
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import config
@@ -28,7 +36,8 @@ GUILD_ID = config.GUILD_ID
 PROFILES_DIR = config.PROFILES_DIR
 TOKENS_FILE = config.TOKENS_FILE
 CONCURRENCY = config.CONCURRENCY
-COMMANDS = config.COMMANDS
+# COMMANDS replaced with single command "owo hunt" (config still provides it but we enforce single command)
+COMMANDS = config.COMMANDS if hasattr(config, 'COMMANDS') else ["owo hunt"]
 COMMAND_INTERVAL_CFG = config.COMMAND_INTERVAL
 ROUNDS_PER_ACCOUNT = config.ROUNDS_PER_ACCOUNT
 LOG_FILE = config.LOG_FILE
@@ -109,42 +118,50 @@ class HumanLikeDiscord:
 
     def _read_local_storage_token(self) -> Optional[str]:
         try:
-            return self.driver.execute_script("return window.localStorage.getItem('token')")
+            # Run JS in page context to read localStorage token
+            return self.driver.execute_script("return window.localStorage.getItem('token');")
         except Exception as e:
             logger.debug(f"read_local_storage_token error: {e}")
             return None
 
     def inject_token_once(self, token: str) -> bool:
         """Single injection attempt using CDP addScriptToEvaluateOnNewDocument.
-        If verification fails, return False quickly.
+        If verification fails, return False quickly. If CDP is unavailable, fall back to execute_script.
         """
         try:
-            safe = token.replace("\\", "\\\\").replace('"', '\\"')
-            js_value_literal = f'\\"{safe}\\"'
-            script = f'window.localStorage.setItem("token", "{js_value_literal}");'
+            # Use json.dumps to produce a proper JS string literal (handles escaping)
+            js_value_literal = json.dumps(token)  # e.g. '"the-token"'
+            script = f'window.localStorage.setItem("token", {js_value_literal});'
 
             # Try one CDP call to add script on new document
+            cdp_ok = False
             try:
                 self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": script})
                 logger.info("CDP injection scheduled (single attempt)")
+                cdp_ok = True
             except Exception as e:
                 logger.info(f"CDP injection call failed (single attempt): {e}")
-                # As per your decision: do not do additional attempts — proceed to open channel
-                return False
+                # Try immediate in-page injection as a fallback (will only affect current document)
+                try:
+                    self.driver.execute_script(script)
+                    logger.info("Fallback: localStorage set via execute_script")
+                except Exception as e2:
+                    logger.info(f"Fallback execute_script injection failed: {e2}")
 
-            # Navigate so the injected script runs on load
+            # Navigate so the injected script runs on load (if CDP scheduled) or so we land in channel
             try:
                 self.driver.get("https://discord.com/channels/@me")
             except Exception:
+                # ignore navigation errors here
                 pass
 
             # short wait then check localStorage
             time.sleep(1.0 + random.random() * 1.0)
             read_back = self._read_local_storage_token()
-            expected = f'"{token}"'
-            logger.debug(f"Single-inject read-back: {read_back}")
+            expected = token
+            logger.debug(f"Single-inject read-back: {read_back!r} expected: {expected!r}")
             if read_back == expected:
-                logger.info("Token verified in localStorage after single CDP attempt")
+                logger.info("Token verified in localStorage after single attempt")
                 return True
             else:
                 logger.info("Token not verified after single attempt; proceeding to open channel")
@@ -153,6 +170,19 @@ class HumanLikeDiscord:
         except Exception as e:
             logger.error(f"inject_token_once exception: {e}")
             return False
+
+    def navigate_to_channel(self, guild_id: str = None, channel_id: str = None):
+        """Navigate directly to a guild/channel URL or to /channels/@me if none provided."""
+        try:
+            if guild_id and channel_id:
+                url = f"https://discord.com/channels/{guild_id}/{channel_id}"
+            else:
+                url = "https://discord.com/channels/@me"
+            self.driver.get(url)
+            # small wait for page JS to run
+            time.sleep(1.0 + random.random() * 1.5)
+        except Exception as e:
+            logger.debug(f"navigate_to_channel failed: {e}")
 
     def find_message_box(self):
         try:
@@ -173,21 +203,25 @@ class HumanLikeDiscord:
 
     def human_move_to_and_click(self, element):
         try:
-            rect = self._get_element_center(element)
-            target_x, target_y = rect['x'], rect['y']
+            # Prefer move_to_element_with_offset so offsets are relative to element rather than global mouse origin
             moves = max(6, int(random.uniform(6, 12)))
             for i in range(moves):
-                frac = (i + 1) / moves
-                ix = int(target_x * frac + random.uniform(-10, 10) * (1 - frac))
-                iy = int(target_y * frac + random.uniform(-8, 8) * (1 - frac))
+                # offsets shrink as we approach the final position
+                offset_x = random.randint(-15, 15)
+                offset_y = random.randint(-12, 12)
                 try:
-                    ActionChains(self.driver).move_by_offset(ix, iy).perform()
+                    ActionChains(self.driver).move_to_element_with_offset(
+                        element,
+                        offset_x,
+                        offset_y
+                    ).perform()
                 except Exception:
                     try:
-                        ActionChains(self.driver).move_to_element_with_offset(element, random.randint(-5,5), random.randint(-5,5)).perform()
+                        ActionChains(self.driver).move_to_element(element).perform()
                     except Exception:
                         pass
                 time.sleep(random.uniform(0.02, 0.08))
+            # final precise move and click
             try:
                 ActionChains(self.driver).move_to_element(element).pause(random.uniform(0.05, 0.15)).click().perform()
             except Exception:
@@ -205,6 +239,7 @@ class HumanLikeDiscord:
 
     def human_type(self, element, text: str):
         try:
+            # Click into the element first
             try:
                 self.human_move_to_and_click(element)
             except Exception:
@@ -225,7 +260,50 @@ class HumanLikeDiscord:
             return False
 
 
+    def click_owo_accept(self, timeout: float = 20.0) -> bool:
+        """
+        Wait for the OwO rules accept button and click it.
+        The button label often contains "I accept the OwO bot rules". We try a couple of robust XPaths.
+        """
+        try:
+            # Try to find button by exact/partial text first
+            xpaths = [
+                "//button[contains(normalize-space(.), 'I accept the OwO bot rules')]",
+                "//button[contains(normalize-space(.), 'I accept') and contains(@class, 'button__')]",
+                "//div[@role='button' and contains(normalize-space(.), 'I accept the OwO bot rules')]",
+                "//button[contains(@class, 'button__201d5')]"  # fallback class fragment (may change)
+            ]
+            btn = None
+            for xp in xpaths:
+                try:
+                    btn = WebDriverWait(self.driver, timeout).until(EC.element_to_be_clickable((By.XPATH, xp)))
+                    if btn:
+                        break
+                except Exception:
+                    btn = None
+            if not btn:
+                logger.info("OwO accept button not found within timeout")
+                return False
+            # click it human-like
+            self.human_move_to_and_click(btn)
+            logger.info("Clicked OwO accept button")
+            # small pause to let Discord process the click
+            time.sleep(1.0 + random.random() * 1.0)
+            return True
+        except Exception as e:
+            logger.info(f"click_owo_accept failed: {e}")
+            return False
+
+
 def parse_tokens(path: str):
+    """
+    Parse tokens file.
+    Accept lines:
+      - token
+      - token:ignored_channel (channel part is ignored)
+    Comments (#) and blank lines are skipped.
+    Returns list of token strings.
+    """
     if not os.path.exists(path):
         logger.error(f"Tokens file not found: {path}")
         return []
@@ -235,72 +313,69 @@ def parse_tokens(path: str):
             s = ln.strip()
             if not s or s.startswith("#"):
                 continue
+            # allow token or token:channel but ignore channel
             if ":" in s:
-                token, ch = s.split(":", 1)
-                token = token.strip()
-                ch = ch.strip()
-                if token and ch:
-                    out.append((token, ch))
+                token = s.split(":", 1)[0].strip()
+                if token:
+                    out.append(token)
+                else:
+                    logger.warning(f"Malformed tokens line (empty token): {s}")
             else:
-                logger.warning(f"Malformed tokens line: {s}")
+                out.append(s)
     return out
 
 
-def handle_account(token, channel_id, guild_id, profiles_base):
+def handle_account(token, guild_id, profiles_base):
+    """
+    For each account:
+    - start browser with profile
+    - inject token (single attempt)
+    - navigate to /channels/@me (or last used channel in profile)
+    - send "owo hunt"
+    - wait for OwO rules button and click it (if present)
+    """
     aid = short_id(token)
     profile_dir = os.path.join(profiles_base, aid)
     client = None
     try:
-        logger.info(f"Starting account {aid} -> channel {channel_id}")
+        logger.info(f"Starting account {aid}")
         client = HumanLikeDiscord(profile_dir)
 
         injected = client.inject_token_once(token)
         if not injected:
             logger.info(f"Token injection not verified for {aid}; proceeding to open channel")
 
-        # try quick login detection then proceed regardless
-        try:
-            client.driver.get(f"https://discord.com/channels/{guild_id}/{channel_id}")
-        except Exception:
-            # fallback to navigate method
-            client.navigate_to_channel(guild_id, channel_id)
+        # navigate to same-channel context (we don't use a channel id; rely on profile's last-open channel or @me)
+        client.navigate_to_channel()  # goes to /channels/@me
 
-        # Infinite or finite loop
-        logger.info("Starting message loop for account")
+        # small wait to ensure page is ready
+        time.sleep(1.0 + random.random() * 1.5)
+
+        # send the single command "owo hunt"
         try:
-            if ROUNDS_PER_ACCOUNT == 0:
-                loop_iter = cycle(COMMANDS)
+            box = client.find_message_box()
+            if not box:
+                logger.warning(f"No message box for {aid}; cannot send message")
             else:
-                # finite rounds: produce sequence of length ROUNDS_PER_ACCOUNT cycling commands
-                seq = []
-                for i in range(ROUNDS_PER_ACCOUNT):
-                    seq.append(COMMANDS[i % len(COMMANDS)])
-                loop_iter = iter(seq)
-
-            for message in loop_iter:
-                wait_time = parse_interval(COMMAND_INTERVAL_CFG)
-                if wait_time < 0.01:
-                    wait_time = 0.01
-                logger.info(f"Next message will be sent in {wait_time:.1f} seconds: {message}")
-                time.sleep(wait_time)
-
-                box = client.find_message_box()
-                if not box:
-                    logger.warning(f"No message box for {aid}; will retry after interval")
-                    continue
-
-                ok = client.human_type(box, message)
-                if ok:
-                    logger.info(f"Message sent: {message}")
+                sent = client.human_type(box, COMMANDS[0])
+                if sent:
+                    logger.info(f"Sent command for {aid}: {COMMANDS[0]}")
                 else:
-                    logger.warning(f"Failed to send message: {message}")
+                    logger.warning(f"Failed to send command for {aid}: {COMMANDS[0]}")
+        except Exception as e:
+            logger.error(f"Error while sending command for {aid}: {e}")
 
-                # tiny random pause before next iteration to vary exact timing
-                time.sleep(random.uniform(0.2, 0.8))
+        # wait for OwO's response and try clicking the accept button
+        try:
+            clicked = client.click_owo_accept(timeout=20.0)
+            if clicked:
+                logger.info(f"OwO rules accepted for {aid}")
+            else:
+                logger.info(f"No OwO accept button clicked for {aid}")
+        except Exception as e:
+            logger.error(f"Error while attempting to click OwO accept for {aid}: {e}")
 
-        except Exception as loop_exc:
-            logger.error(f"Message loop exception for {aid}: {loop_exc}")
-
+        # finished this account
         logger.info(f"Finished account {aid}")
 
     except Exception as e:
@@ -311,7 +386,7 @@ def handle_account(token, channel_id, guild_id, profiles_base):
 
 
 def main():
-    logger.info("Runner starting")
+    logger.info("Runner starting (sequential mode: one account at a time)")
     if not GUILD_ID:
         logger.error("GUILD_ID not set in config.py")
         return
@@ -319,17 +394,15 @@ def main():
     if not accounts:
         logger.error("No accounts found in tokens file")
         return
-    max_workers = len(accounts) if CONCURRENCY <= 0 else min(CONCURRENCY, len(accounts))
-    logger.info(f"Running {len(accounts)} accounts with concurrency={max_workers}")
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = []
-        for token, ch in accounts:
-            futures.append(ex.submit(handle_account, token, ch, GUILD_ID, PROFILES_DIR))
-        for f in futures:
-            try:
-                f.result()
-            except Exception as e:
-                logger.error(f"Account job failed: {e}")
+
+    logger.info(f"Running {len(accounts)} accounts sequentially")
+    # Sequential processing: one account fully completes before next starts
+    for token in accounts:
+        try:
+            handle_account(token, GUILD_ID, PROFILES_DIR)
+        except Exception as e:
+            logger.error(f"Account job failed: {e}")
+
     logger.info("All done")
 
 
