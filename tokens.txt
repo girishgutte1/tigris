@@ -1,0 +1,7 @@
+# Example tokens.txt (DO NOT PUT REAL TOKENS IN VERSION CONTROL)
+# Format: token:channel_id
+# One entry per line. Lines starting with # are ignored.
+
+# Example (fake tokens):
+# eyJ0eXAiOiJKV1QiLCJh...:123456789012345678
+# mfa.ABCdefGHI...:234567890123456789
