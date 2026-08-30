@@ -127,18 +127,18 @@ class HumanLikeDiscord:
     def inject_token_once(self, token: str) -> bool:
         """Single injection attempt using CDP addScriptToEvaluateOnNewDocument.
         If verification fails, return False quickly. If CDP is unavailable, fall back to execute_script.
+        This version stores the token surrounded by quotes (e.g. '"token"') in localStorage as requested.
         """
         try:
-            # Use json.dumps to produce a proper JS string literal (handles escaping)
-            js_value_literal = json.dumps(token)  # e.g. '"the-token"'
+            # We need the value in localStorage to include quotes, e.g. '"the-token"'.
+            value_with_quotes = f'"{token}"'
+            js_value_literal = json.dumps(value_with_quotes)  # JS literal for the string that includes quotes
             script = f'window.localStorage.setItem("token", {js_value_literal});'
 
             # Try one CDP call to add script on new document
-            cdp_ok = False
             try:
                 self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": script})
                 logger.info("CDP injection scheduled (single attempt)")
-                cdp_ok = True
             except Exception as e:
                 logger.info(f"CDP injection call failed (single attempt): {e}")
                 # Try immediate in-page injection as a fallback (will only affect current document)
@@ -158,7 +158,7 @@ class HumanLikeDiscord:
             # short wait then check localStorage
             time.sleep(1.0 + random.random() * 1.0)
             read_back = self._read_local_storage_token()
-            expected = token
+            expected = value_with_quotes
             logger.debug(f"Single-inject read-back: {read_back!r} expected: {expected!r}")
             if read_back == expected:
                 logger.info("Token verified in localStorage after single attempt")
