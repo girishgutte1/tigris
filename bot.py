@@ -273,17 +273,19 @@ class HumanLikeDiscord:
         """
         Wait for the OwO rules accept button and click it.
         The button label often contains "I accept the OwO bot rules". We try a couple of robust XPaths.
+        Uses the last() occurrence so we click the most recent button in the DOM.
         """
         try:
-            # Try to find button by exact/partial text first
-            xpaths = [
+            # Try to find button by exact/partial text first, prefer the last matching one
+            base_xpaths = [
                 "//button[contains(normalize-space(.), 'I accept the OwO bot rules')]",
                 "//button[contains(normalize-space(.), 'I accept') and contains(@class, 'button__')]",
                 "//div[@role='button' and contains(normalize-space(.), 'I accept the OwO bot rules')]",
                 "//button[contains(@class, 'button__201d5')]"  # fallback class fragment (may change)
             ]
             btn = None
-            for xp in xpaths:
+            for bx in base_xpaths:
+                xp = f"({bx})[last()]"
                 try:
                     btn = WebDriverWait(self.driver, timeout).until(EC.element_to_be_clickable((By.XPATH, xp)))
                     if btn:
@@ -306,17 +308,18 @@ class HumanLikeDiscord:
     def click_confirm(self, timeout: float = 12.0) -> bool:
         """
         Wait for a confirmation button (label contains 'Confirm' or similar) and click it.
-        Returns True if clicked.
+        Returns True if clicked. Uses last() to target the newest confirm button.
         """
         try:
-            xpaths = [
+            base_xpaths = [
                 "//button[contains(normalize-space(.), 'Confirm')]",
                 "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]",
                 "//div[@role='button' and contains(normalize-space(.), 'Confirm')]",
                 "//button[contains(@class, 'button__') and contains(normalize-space(.), 'Confirm')]"
             ]
             btn = None
-            for xp in xpaths:
+            for bx in base_xpaths:
+                xp = f"({bx})[last()]"
                 try:
                     btn = WebDriverWait(self.driver, timeout).until(EC.element_to_be_clickable((By.XPATH, xp)))
                     if btn:
