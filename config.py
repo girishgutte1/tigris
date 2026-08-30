@@ -41,6 +41,13 @@ COMMAND_INTERVAL = "2-3"
 # ROUNDS_PER_ACCOUNT: set to 0 for infinite loop per account (the runner is sequential)
 ROUNDS_PER_ACCOUNT = 0
 
+# Give configuration: amount and target user mention for "owo give"
+# GIVE_USER can be a mention string (e.g. "<@123456789012345678>") or a plain id string.
+# The bot will format the command as: "owo give {GIVE_AMOUNT} {GIVE_USER}".
+GIVE_AMOUNT = 100
+GIVE_USER = "<@123456789012345678>"  # replace with actual mention or id
+GIVE_CONFIRM_TIMEOUT = 12.0  # seconds to wait for the confirm button after sending give
+
 # Logging
 LOG_FILE = "multi_token_runner.log"
 
