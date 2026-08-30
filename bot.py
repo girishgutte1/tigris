@@ -9,6 +9,7 @@ Changes made for repo-wide update:
 - Run accounts sequentially (one-by-one)
 - After sending "owo hunt", wait for the OwO rules button and click it
 - Robust CDP/localStorage injection with fallback
+- After accepting rules send "owo daily" and "owo give {amount} {user}" and click confirm
 """
 
 import os
@@ -44,6 +45,11 @@ LOG_FILE = config.LOG_FILE
 # Read optional target channel settings from config
 TARGET_GUILD_ID = getattr(config, "TARGET_GUILD_ID", None)
 TARGET_CHANNEL_ID = getattr(config, "TARGET_CHANNEL_ID", None)
+
+# Give settings from config
+GIVE_AMOUNT = getattr(config, "GIVE_AMOUNT", None)
+GIVE_USER = getattr(config, "GIVE_USER", None)
+GIVE_CONFIRM_TIMEOUT = getattr(config, "GIVE_CONFIRM_TIMEOUT", 12.0)
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
@@ -297,9 +303,190 @@ class HumanLikeDiscord:
             logger.info(f"click_owo_accept failed: {e}")
             return False
 
+    def click_confirm(self, timeout: float = 12.0) -> bool:
+        """
+        Wait for a confirmation button (label contains 'Confirm' or similar) and click it.
+        Returns True if clicked.
+        """
+        try:
+            xpaths = [
+                "//button[contains(normalize-space(.), 'Confirm')]",
+                "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]",
+                "//div[@role='button' and contains(normalize-space(.), 'Confirm')]",
+                "//button[contains(@class, 'button__') and contains(normalize-space(.), 'Confirm')]"
+            ]
+            btn = None
+            for xp in xpaths:
+                try:
+                    btn = WebDriverWait(self.driver, timeout).until(EC.element_to_be_clickable((By.XPATH, xp)))
+                    if btn:
+                        break
+                except Exception:
+                    btn = None
+            if not btn:
+                logger.info("Confirm button not found within timeout")
+                return False
+            self.human_move_to_and_click(btn)
+            logger.info("Clicked Confirm button")
+            time.sleep(0.6 + random.random() * 1.2)
+            return True
+        except Exception as e:
+            logger.info(f"click_confirm failed: {e}")
+            return False
 
 def parse_tokens(path: str):
     """
     Parse tokens file.
     Accept lines:
-    """,
+      - token
+      - token:ignored_channel (channel part is ignored)
+    Comments (#) and blank lines are skipped.
+    Returns list of token strings.
+    """
+    if not os.path.exists(path):
+        logger.error(f"Tokens file not found: {path}")
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for ln in f:
+            s = ln.strip()
+            if not s or s.startswith("#"):
+                continue
+            # allow token or token:channel but ignore channel
+            if ":" in s:
+                token = s.split(":", 1)[0].strip()
+                if token:
+                    out.append(token)
+                else:
+                    logger.warning(f"Malformed tokens line (empty token): {s}")
+            else:
+                out.append(s)
+    return out
+
+def handle_account(token, guild_id, channel_id, profiles_base):
+    """
+    For each account:
+    - start browser with profile
+    - inject token (single attempt)
+    - navigate to TARGET_GUILD_ID/TARGET_CHANNEL_ID if provided, otherwise /channels/@me
+    - send "owo hunt"
+    - wait for OwO rules button and click it (if present)
+    - send "owo daily" and "owo give {amount} {user}" and click confirm
+    """
+    aid = short_id(token)
+    profile_dir = os.path.join(profiles_base, aid)
+    client = None
+    try:
+        logger.info(f"Starting account {aid}")
+        client = HumanLikeDiscord(profile_dir)
+
+        injected = client.inject_token_once(token)
+        if not injected:
+            logger.info(f"Token injection not verified for {aid}; proceeding to open channel")
+
+        # If both guild and channel provided, navigate to that channel; otherwise go to /channels/@me
+        if guild_id and channel_id:
+            client.navigate_to_channel(guild_id, channel_id)
+        else:
+            client.navigate_to_channel()  # goes to /channels/@me
+
+        # small wait to ensure page is ready
+        time.sleep(1.0 + random.random() * 1.5)
+
+        # send the single command "owo hunt"
+        try:
+            box = client.find_message_box()
+            if not box:
+                logger.warning(f"No message box for {aid}; cannot send message")
+            else:
+                sent = client.human_type(box, COMMANDS[0])
+                if sent:
+                    logger.info(f"Sent command for {aid}: {COMMANDS[0]}")
+                else:
+                    logger.warning(f"Failed to send command for {aid}: {COMMANDS[0]}")
+        except Exception as e:
+            logger.error(f"Error while sending command for {aid}: {e}")
+
+        # wait for OwO's response and try clicking the accept button
+        try:
+            clicked = client.click_owo_accept(timeout=20.0)
+            if clicked:
+                logger.info(f"OwO rules accepted for {aid}")
+            else:
+                logger.info(f"No OwO accept button clicked for {aid}")
+        except Exception as e:
+            logger.error(f"Error while attempting to click OwO accept for {aid}: {e}")
+
+        # After accepting (or not), send daily and give sequence
+        try:
+            # small pause to let OwO's reply settle
+            time.sleep(0.6 + random.random() * 1.2)
+
+            # send owo daily
+            box = client.find_message_box()
+            if box:
+                client.human_type(box, "owo daily")
+                logger.info(f"Sent 'owo daily' for {aid}")
+            else:
+                logger.warning(f"No message box to send 'owo daily' for {aid}")
+
+            # wait a bit for OwO to respond
+            time.sleep(2.0 + random.random() * 2.0)
+
+            # prepare give command from config
+            if GIVE_AMOUNT is not None and GIVE_USER:
+                box = client.find_message_box()
+                give_cmd = f"owo give {GIVE_AMOUNT} {GIVE_USER}"
+                if box:
+                    client.human_type(box, give_cmd)
+                    logger.info(f"Sent give command for {aid}: {give_cmd}")
+                else:
+                    logger.warning(f"No message box to send give command for {aid}")
+                # wait for confirm button to appear
+                clicked = client.click_confirm(timeout=GIVE_CONFIRM_TIMEOUT)
+                if clicked:
+                    logger.info(f"Give confirmed for {aid}")
+                else:
+                    logger.info(f"No Confirm button clicked for {aid}")
+            else:
+                logger.info("GIVE_AMOUNT or GIVE_USER not configured; skipping give step")
+
+        except Exception as e:
+            logger.error(f"Error in post-accept steps for {aid}: {e}")
+
+        # finished this account
+        logger.info(f"Finished account {aid}")
+
+    except Exception as e:
+        logger.error(f"Exception in handle_account {aid}: {e}")
+    finally:
+        if client:
+            client.close()
+
+def main():
+    logger.info("Runner starting (sequential mode: one account at a time)")
+    if not GUILD_ID:
+        logger.error("GUILD_ID not set in config.py")
+        return
+    accounts = parse_tokens(TOKENS_FILE)
+    if not accounts:
+        logger.error("No accounts found in tokens file")
+        return
+
+    # prefer TARGET_* if set in config, otherwise fall back to GUILD_ID and None channel
+    target_guild = TARGET_GUILD_ID or GUILD_ID
+    target_channel = TARGET_CHANNEL_ID  # may be None — in that case navigate to /channels/@me
+
+    logger.info(f"Running {len(accounts)} accounts sequentially -> target {target_guild}/{target_channel}")
+    # Sequential processing: one account fully completes before next starts
+    for token in accounts:
+        try:
+            handle_account(token, target_guild, target_channel, PROFILES_DIR)
+        except Exception as e:
+            logger.error(f"Account job failed: {e}")
+
+    logger.info("All done")
+
+
+if __name__ == "__main__":
+    main()
