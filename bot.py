@@ -41,6 +41,9 @@ COMMANDS = config.COMMANDS if hasattr(config, 'COMMANDS') else ["owo hunt"]
 COMMAND_INTERVAL_CFG = config.COMMAND_INTERVAL
 ROUNDS_PER_ACCOUNT = config.ROUNDS_PER_ACCOUNT
 LOG_FILE = config.LOG_FILE
+# Read optional target channel settings from config
+TARGET_GUILD_ID = getattr(config, "TARGET_GUILD_ID", None)
+TARGET_CHANNEL_ID = getattr(config, "TARGET_CHANNEL_ID", None)
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
@@ -299,112 +302,4 @@ def parse_tokens(path: str):
     """
     Parse tokens file.
     Accept lines:
-      - token
-      - token:ignored_channel (channel part is ignored)
-    Comments (#) and blank lines are skipped.
-    Returns list of token strings.
-    """
-    if not os.path.exists(path):
-        logger.error(f"Tokens file not found: {path}")
-        return []
-    out = []
-    with open(path, "r", encoding="utf-8") as f:
-        for ln in f:
-            s = ln.strip()
-            if not s or s.startswith("#"):
-                continue
-            # allow token or token:channel but ignore channel
-            if ":" in s:
-                token = s.split(":", 1)[0].strip()
-                if token:
-                    out.append(token)
-                else:
-                    logger.warning(f"Malformed tokens line (empty token): {s}")
-            else:
-                out.append(s)
-    return out
-
-
-def handle_account(token, guild_id, profiles_base):
-    """
-    For each account:
-    - start browser with profile
-    - inject token (single attempt)
-    - navigate to /channels/@me (or last used channel in profile)
-    - send "owo hunt"
-    - wait for OwO rules button and click it (if present)
-    """
-    aid = short_id(token)
-    profile_dir = os.path.join(profiles_base, aid)
-    client = None
-    try:
-        logger.info(f"Starting account {aid}")
-        client = HumanLikeDiscord(profile_dir)
-
-        injected = client.inject_token_once(token)
-        if not injected:
-            logger.info(f"Token injection not verified for {aid}; proceeding to open channel")
-
-        # navigate to same-channel context (we don't use a channel id; rely on profile's last-open channel or @me)
-        client.navigate_to_channel()  # goes to /channels/@me
-
-        # small wait to ensure page is ready
-        time.sleep(1.0 + random.random() * 1.5)
-
-        # send the single command "owo hunt"
-        try:
-            box = client.find_message_box()
-            if not box:
-                logger.warning(f"No message box for {aid}; cannot send message")
-            else:
-                sent = client.human_type(box, COMMANDS[0])
-                if sent:
-                    logger.info(f"Sent command for {aid}: {COMMANDS[0]}")
-                else:
-                    logger.warning(f"Failed to send command for {aid}: {COMMANDS[0]}")
-        except Exception as e:
-            logger.error(f"Error while sending command for {aid}: {e}")
-
-        # wait for OwO's response and try clicking the accept button
-        try:
-            clicked = client.click_owo_accept(timeout=20.0)
-            if clicked:
-                logger.info(f"OwO rules accepted for {aid}")
-            else:
-                logger.info(f"No OwO accept button clicked for {aid}")
-        except Exception as e:
-            logger.error(f"Error while attempting to click OwO accept for {aid}: {e}")
-
-        # finished this account
-        logger.info(f"Finished account {aid}")
-
-    except Exception as e:
-        logger.error(f"Exception in handle_account {aid}: {e}")
-    finally:
-        if client:
-            client.close()
-
-
-def main():
-    logger.info("Runner starting (sequential mode: one account at a time)")
-    if not GUILD_ID:
-        logger.error("GUILD_ID not set in config.py")
-        return
-    accounts = parse_tokens(TOKENS_FILE)
-    if not accounts:
-        logger.error("No accounts found in tokens file")
-        return
-
-    logger.info(f"Running {len(accounts)} accounts sequentially")
-    # Sequential processing: one account fully completes before next starts
-    for token in accounts:
-        try:
-            handle_account(token, GUILD_ID, PROFILES_DIR)
-        except Exception as e:
-            logger.error(f"Account job failed: {e}")
-
-    logger.info("All done")
-
-
-if __name__ == "__main__":
-    main()
+    """,
