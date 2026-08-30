@@ -1,8 +1,17 @@
 # Configuration for the Discord multi-token runner
 
 # The guild (server) ID to navigate to when opening a specific channel.
-# Keep this set, but bot now defaults to /channels/@me when no channel is specified per-token.
+# Keep this set as a fallback. If you want all accounts to send into a specific channel,
+# set TARGET_GUILD_ID and TARGET_CHANNEL_ID below instead of relying on per-token channels.
 GUILD_ID = "980693344747388928"
+
+# When set, all accounts will be navigated to TARGET_GUILD_ID / TARGET_CHANNEL_ID before sending commands.
+# Example:
+# TARGET_GUILD_ID = "980693344747388928"
+# TARGET_CHANNEL_ID = "123456789012345678"
+# Set either to None to disable and fall back to GUILD_ID / /channels/@me behavior.
+TARGET_GUILD_ID = None
+TARGET_CHANNEL_ID = None
 
 # Where per-account Chrome profiles will be stored (keeps sessions between runs)
 PROFILES_DIR = "profiles"
