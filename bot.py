@@ -50,6 +50,8 @@ TARGET_CHANNEL_ID = getattr(config, "TARGET_CHANNEL_ID", None)
 GIVE_AMOUNT = getattr(config, "GIVE_AMOUNT", None)
 GIVE_USER = getattr(config, "GIVE_USER", None)
 GIVE_CONFIRM_TIMEOUT = getattr(config, "GIVE_CONFIRM_TIMEOUT", 12.0)
+# Accept-rules timeout (configurable)
+ACCEPT_TIMEOUT = getattr(config, "ACCEPT_TIMEOUT", 20.0)
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
@@ -412,7 +414,7 @@ def handle_account(token, guild_id, channel_id, profiles_base):
 
         # wait for OwO's response and try clicking the accept button
         try:
-            clicked = client.click_owo_accept(timeout=20.0)
+            clicked = client.click_owo_accept(timeout=ACCEPT_TIMEOUT)
             if clicked:
                 logger.info(f"OwO rules accepted for {aid}")
             else:
